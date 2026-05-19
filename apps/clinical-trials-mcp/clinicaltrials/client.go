@@ -41,6 +41,14 @@ type GetStudyParams struct {
 	StudyID    string `json:"study_id,omitempty" jsonschema:"Optional generic study identifier. Can be either a ClinicalTrials.gov NCT ID or an EU Clinical Trials CT number. Use this when the user provides one identifier without naming the registry."`
 }
 
+type SearchTrialsOutput struct {
+	Markdown string `json:"markdown" jsonschema:"Compact markdown Trial Search Results labelled by source registry with identifiers, titles, statuses, conditions, phase or study type, summaries, source URLs, and pagination details."`
+}
+
+type GetStudyOutput struct {
+	Markdown string `json:"markdown" jsonschema:"Curated markdown Study Document labelled with source metadata, not raw registry JSON."`
+}
+
 func NewClient(baseURL string, euBaseURL string, requestTimeout time.Duration, maxPageSize int) *Client {
 	return &Client{
 		baseURL:   strings.TrimRight(baseURL, "/"),

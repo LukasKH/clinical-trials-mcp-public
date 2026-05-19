@@ -60,36 +60,28 @@ func newMCPServer(client *clinicaltrials.Client) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_trials",
 		Description: "Search public clinical trial registry records from ClinicalTrials.gov and EU Clinical Trials. Requires query. Optional shared filters are condition, intervention, sponsor, title, outcome, country, and location. Optional region can be ALL, US, or EU: US searches ClinicalTrials.gov, EU searches EU Clinical Trials, and ALL or omitted region searches both registries. Natural-language location values such as Europe, European Union, EU, United States, U.S., USA, and America are normalized to EU or US when region is omitted; other location values are treated as country filters. Use US or EU only when the user asks for that registry region. Returns compact Trial Search Results labelled by source registry with identifiers, titles, statuses, conditions, phase or study type, summaries, source URLs, and pagination details.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, params clinicaltrials.SearchTrialsParams) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, params clinicaltrials.SearchTrialsParams) (*mcp.CallToolResult, clinicaltrials.SearchTrialsOutput, error) {
 		log.Printf("MCP tool call: search_trials query=%q region=%q page_size=%d", params.Query, params.Region, params.PageSize)
 		result, err := client.SearchTrials(ctx, params)
 		if err != nil {
-			return nil, nil, err
+			return nil, clinicaltrials.SearchTrialsOutput{}, err
 		}
-		return textResult(result), nil, nil
+		return nil, clinicaltrials.SearchTrialsOutput{Markdown: result}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_study",
 		Description: "Retrieve one public study record by ClinicalTrials.gov NCT ID or EU Clinical Trials CT number. Provide nct_id, eu_ct_number, or study_id. Returns a curated markdown Study Document labelled with source metadata, not raw registry JSON.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, params clinicaltrials.GetStudyParams) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, params clinicaltrials.GetStudyParams) (*mcp.CallToolResult, clinicaltrials.GetStudyOutput, error) {
 		log.Printf("MCP tool call: get_study nct_id=%q eu_ct_number=%q study_id=%q", params.NCTID, params.EUCTNumber, params.StudyID)
 		result, err := client.GetStudy(ctx, params)
 		if err != nil {
-			return nil, nil, err
+			return nil, clinicaltrials.GetStudyOutput{}, err
 		}
-		return textResult(result), nil, nil
+		return nil, clinicaltrials.GetStudyOutput{Markdown: result}, nil
 	})
 
 	return server
-}
-
-func textResult(text string) *mcp.CallToolResult {
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: text},
-		},
-	}
 }
 
 func envString(name string, fallback string) string {
