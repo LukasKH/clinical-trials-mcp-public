@@ -1,0 +1,40 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local environment
+.env
+gha-creds-*.json
+tmp/
+tmp*
+
+# Go
+bin/
+*.test
+*.out
+coverage/
+
+# Docker and build output
+dist/
+build/
+
+# Terraform
+.terraform/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfplan
+bootstrap.auto.tfvars
+!**/.terraform.lock.hcl
+!*.tfvars.example
+!*.tfvars.json.example

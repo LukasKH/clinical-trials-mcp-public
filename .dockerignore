@@ -1,0 +1,11 @@
+.git
+.github
+gha-creds-*.json
+.terraform
+**/.terraform
+**/.terraform.lock.hcl
+**/bootstrap.auto.tfvars
+.venv
+.pytest_cache
+.ruff_cache
+tmp

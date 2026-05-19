@@ -1,0 +1,12 @@
+project_id                               = "your-gcp-project-id"
+region                                   = "europe-west3"
+github_repository                        = "owner/clinical-trials-mcp"
+terraform_deployer_service_account_email = "trial-mcp-tf-deployer@your-gcp-project-id.iam.gserviceaccount.com"
+
+# Optional overrides. Defaults are suitable for a new self-hosted deployment.
+# service_name           = "clinicaltrials-gov-mcp"
+# artifact_repository_id = "clinical-trials-mcp"
+
+# The demo is intentionally public and self-hostable. This single switch
+# disables the Cloud Run Invoker IAM check so the MCP endpoint is callable.
+public_access_enabled = true

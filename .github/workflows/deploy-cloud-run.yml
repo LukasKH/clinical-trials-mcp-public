@@ -1,0 +1,178 @@
+name: Cloud Run
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: cloud-run-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  APP_DIR: apps/clinical-trials-mcp
+  DOCKERFILE: apps/clinical-trials-mcp/Dockerfile
+  TERRAFORM_DIR: infra/remote-mcp
+
+jobs:
+  detect_changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      app_changed: ${{ steps.filter.outputs.app }}
+      infra_changed: ${{ steps.filter.outputs.infra }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            app:
+              - 'apps/clinical-trials-mcp/**'
+              - '.dockerignore'
+              - '.github/workflows/deploy-cloud-run.yml'
+            infra:
+              - 'infra/**'
+              - 'bootstrap.sh'
+              - '.github/workflows/deploy-cloud-run.yml'
+
+  validate_app:
+    name: Validate app
+    needs: detect_changes
+    runs-on: ubuntu-latest
+    if: needs.detect_changes.outputs.app_changed == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.APP_DIR }}/go.mod
+          cache-dependency-path: ${{ env.APP_DIR }}/go.sum
+
+      - name: Go test
+        run: go test -race ./...
+        working-directory: ${{ env.APP_DIR }}
+
+      - name: Docker build
+        run: docker build -f "${DOCKERFILE}" -t clinical-trials-mcp:ci .
+
+  validate_infra:
+    name: Validate Terraform
+    needs: detect_changes
+    runs-on: ubuntu-latest
+    if: needs.detect_changes.outputs.infra_changed == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform fmt
+        run: terraform -chdir="${TERRAFORM_DIR}" fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform -chdir="${TERRAFORM_DIR}" init -backend=false
+
+      - name: Terraform validate
+        run: terraform -chdir="${TERRAFORM_DIR}" validate
+
+  terraform_apply:
+    name: Apply Terraform
+    needs:
+      - detect_changes
+      - validate_infra
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.detect_changes.outputs.infra_changed == 'true'
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.TERRAFORM_DEPLOYER_SERVICE_ACCOUNT }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        run: |
+          terraform -chdir="${TERRAFORM_DIR}" init \
+            -backend-config="bucket=${{ vars.TERRAFORM_STATE_BUCKET }}" \
+            -backend-config="prefix=${{ vars.TERRAFORM_STATE_PREFIX }}"
+
+      - name: Terraform apply
+        run: terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve
+
+  deploy_image:
+    name: Deploy image
+    needs:
+      - detect_changes
+      - validate_app
+      - terraform_apply
+    runs-on: ubuntu-latest
+    if: >
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.detect_changes.outputs.app_changed == 'true' &&
+      needs.validate_app.result == 'success' &&
+      (needs.detect_changes.outputs.infra_changed != 'true' || needs.terraform_apply.result == 'success')
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Build image
+        env:
+          IMAGE: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}/${{ vars.CLOUD_RUN_SERVICE }}:${{ github.sha }}
+        run: docker build -f "${DOCKERFILE}" -t "${IMAGE}" .
+
+      - name: Push image
+        env:
+          IMAGE: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}/${{ vars.CLOUD_RUN_SERVICE }}:${{ github.sha }}
+        run: docker push "${IMAGE}"
+
+      - name: Deploy Cloud Run revision
+        env:
+          IMAGE: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}/${{ vars.CLOUD_RUN_SERVICE }}:${{ github.sha }}
+        run: |
+          gcloud run deploy "${{ vars.CLOUD_RUN_SERVICE }}" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --image "${IMAGE}" \
+            --quiet
