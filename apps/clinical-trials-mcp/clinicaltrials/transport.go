@@ -13,6 +13,10 @@ import (
 )
 
 func (c *Client) requestJSON(ctx context.Context, source string, method string, endpoint string, values url.Values, body any) (map[string]any, error) {
+	return c.requestJSONWithHeaders(ctx, source, method, endpoint, values, body, nil)
+}
+
+func (c *Client) requestJSONWithHeaders(ctx context.Context, source string, method string, endpoint string, values url.Values, body any, headers map[string]string) (map[string]any, error) {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		requestURL := endpoint
@@ -34,7 +38,9 @@ func (c *Client) requestJSON(ctx context.Context, source string, method string, 
 		req.Header.Set("Accept", "application/json")
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Origin", "https://euclinicaltrials.eu")
+		}
+		for key, value := range headers {
+			req.Header.Set(key, value)
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 clinical-trials-mcp/0.1")
 

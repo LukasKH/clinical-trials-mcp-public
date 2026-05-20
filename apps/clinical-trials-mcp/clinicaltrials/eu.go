@@ -9,7 +9,15 @@ import (
 )
 
 func (c *Client) searchEUClinicalTrials(ctx context.Context, params SearchTrialsParams) (map[string]any, error) {
-	return c.requestJSON(ctx, "EU Clinical Trials", http.MethodPost, c.euBaseURL+"/search", nil, c.euSearchRequestBody(params))
+	return c.requestJSONWithHeaders(
+		ctx,
+		"EU Clinical Trials",
+		http.MethodPost,
+		c.euBaseURL+"/search",
+		nil,
+		c.euSearchRequestBody(params),
+		map[string]string{"Origin": "https://euclinicaltrials.eu"},
+	)
 }
 
 func (c *Client) getEUClinicalTrialsStudy(ctx context.Context, ctNumber string) (map[string]any, error) {
