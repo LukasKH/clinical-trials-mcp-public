@@ -12,21 +12,6 @@ import (
 	"time"
 )
 
-func (c *Client) getJSON(ctx context.Context, path string, values url.Values) (map[string]any, error) {
-	endpoint := c.baseURL + path
-	return c.requestJSON(ctx, "ClinicalTrials.gov", http.MethodGet, endpoint, values, nil)
-}
-
-func (c *Client) getEUJSON(ctx context.Context, path string) (map[string]any, error) {
-	endpoint := c.euBaseURL + path
-	return c.requestJSON(ctx, "EU Clinical Trials", http.MethodGet, endpoint, nil, nil)
-}
-
-func (c *Client) postEUJSON(ctx context.Context, path string, body any) (map[string]any, error) {
-	endpoint := c.euBaseURL + path
-	return c.requestJSON(ctx, "EU Clinical Trials", http.MethodPost, endpoint, nil, body)
-}
-
 func (c *Client) requestJSON(ctx context.Context, source string, method string, endpoint string, values url.Values, body any) (map[string]any, error) {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {

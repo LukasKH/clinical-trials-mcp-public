@@ -3,41 +3,139 @@ package clinicaltrials
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 )
 
-func (c *Client) GetStudy(ctx context.Context, params GetStudyParams) (string, error) {
-	studyID := strings.TrimSpace(params.StudyID)
-	if studyID == "" {
-		studyID = strings.TrimSpace(params.NCTID)
-	}
-	if studyID == "" {
-		studyID = strings.TrimSpace(params.EUCTNumber)
-	}
-	normalizedNCTID := strings.ToUpper(studyID)
-	if euCTNumberPattern.MatchString(studyID) {
-		data, err := c.getEUJSON(ctx, "/retrieve/"+studyID)
-		if err != nil {
-			return "", err
-		}
-		return renderEUStudyDocument(studyID, data), nil
-	}
-	if !nctIDPattern.MatchString(normalizedNCTID) {
-		return "", fmt.Errorf("study_id must be an NCT ID like NCT04280705 or an EU Clinical Trials CT number like 2025-523486-17-00")
-	}
-
-	values := url.Values{}
-	values.Set("format", "json")
-	data, err := c.getJSON(ctx, "/studies/"+normalizedNCTID, values)
-	if err != nil {
-		return "", err
-	}
-
-	return renderStudyDocument(normalizedNCTID, data), nil
+var searchFields = []string{
+	"NCTId",
+	"BriefTitle",
+	"OfficialTitle",
+	"OverallStatus",
+	"Condition",
+	"Phase",
+	"StudyType",
+	"BriefSummary",
 }
 
-func renderStudyDocument(nctID string, data map[string]any) string {
+func (c *Client) searchClinicalTrialsGov(ctx context.Context, params SearchTrialsParams, region string) (map[string]any, url.Values, error) {
+	values, err := c.clinicalTrialsGovSearchValues(params, region)
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := c.requestJSON(ctx, "ClinicalTrials.gov", http.MethodGet, c.baseURL+"/studies", values, nil)
+	return data, values, err
+}
+
+func (c *Client) getClinicalTrialsGovStudy(ctx context.Context, nctID string) (map[string]any, error) {
+	values := url.Values{}
+	values.Set("format", "json")
+	return c.requestJSON(ctx, "ClinicalTrials.gov", http.MethodGet, c.baseURL+"/studies/"+nctID, values, nil)
+}
+
+func (c *Client) clinicalTrialsGovSearchValues(params SearchTrialsParams, region string) (url.Values, error) {
+	if strings.TrimSpace(params.Query) == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+
+	pageSize := params.PageSize
+	if pageSize == 0 {
+		pageSize = 5
+	}
+	pageSize = clamp(pageSize, 1, c.maxPageSize)
+
+	values := url.Values{}
+	values.Set("pageSize", fmt.Sprintf("%d", pageSize))
+	values.Set("countTotal", "true")
+	values.Set("fields", strings.Join(searchFields, "|"))
+	values.Set("format", "json")
+	addFilter(values, "query.term", params.Query)
+	addFilter(values, "query.cond", params.Condition)
+	addFilter(values, "query.intr", params.Intervention)
+	addFilter(values, "query.spons", params.Sponsor)
+	addFilter(values, "query.titles", params.Title)
+	addFilter(values, "query.outc", params.Outcome)
+	if region == "US" {
+		addFilter(values, "filter.advanced", locationCountryFilter(fallback(params.Country, "United States")))
+	} else {
+		addFilter(values, "filter.advanced", locationCountryFilter(params.Country))
+	}
+	if !strings.HasPrefix(strings.TrimSpace(strings.ToLower(params.PageToken)), "eu:") {
+		addFilter(values, "pageToken", params.PageToken)
+	}
+	return values, nil
+}
+
+func renderClinicalTrialsGovSearchResults(data map[string]any, values url.Values) string {
+	studies, _ := data["studies"].([]any)
+	if len(studies) == 0 {
+		return "## ClinicalTrials.gov\n\n" + emptySearchResult(values)
+	}
+
+	lines := []string{"## ClinicalTrials.gov", ""}
+	if totalCount, ok := data["totalCount"]; ok {
+		lines = append(lines, fmt.Sprintf("Total matching studies: %s", text(totalCount)), "")
+	}
+
+	for index, rawStudy := range studies {
+		study, _ := rawStudy.(map[string]any)
+		protocol := object(study, "protocolSection")
+		identification := object(protocol, "identificationModule")
+		status := object(protocol, "statusModule")
+		design := object(protocol, "designModule")
+		conditions := object(protocol, "conditionsModule")
+		description := object(protocol, "descriptionModule")
+
+		nctID := text(identification["nctId"])
+		title := text(firstPresent(identification["briefTitle"], identification["officialTitle"], "Untitled study"))
+		overallStatus := text(status["overallStatus"])
+		conditionNames := listText(conditions["conditions"])
+		phases := listText(design["phases"])
+		studyType := text(design["studyType"])
+		summary := shorten(text(description["briefSummary"]), 420)
+
+		lines = append(lines,
+			fmt.Sprintf("## %d. %s: %s", index+1, nctID, title),
+			fmt.Sprintf("- Status: %s", fallback(overallStatus, "Not provided")),
+			fmt.Sprintf("- Conditions: %s", fallback(conditionNames, "Not provided")),
+			fmt.Sprintf("- Phase / Study type: %s", joinAvailable(phases, studyType)),
+			fmt.Sprintf("- Short summary: %s", fallback(summary, "Not provided")),
+			fmt.Sprintf("- Source URL: %s/%s", sourceBaseURL, nctID),
+			"",
+		)
+	}
+
+	if nextPageToken := text(data["nextPageToken"]); nextPageToken != "" {
+		lines = append(lines, "More results are available.", fmt.Sprintf("Next page token: %s", nextPageToken))
+	}
+
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func emptySearchResult(values url.Values) string {
+	keys := make([]string, 0)
+	for key := range values {
+		if strings.HasPrefix(key, "query.") || strings.HasPrefix(key, "filter.") {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+
+	lines := []string{"No Trial Search Results found for the supplied search criteria."}
+	if len(keys) > 0 {
+		criteria := make([]string, 0, len(keys))
+		for _, key := range keys {
+			criteria = append(criteria, fmt.Sprintf("%s=%s", key, values.Get(key)))
+		}
+		lines = append(lines, "Criteria: "+strings.Join(criteria, ", "))
+	}
+	lines = append(lines, "Try broader search terms or fewer filters.")
+	return strings.Join(lines, "\n")
+}
+
+func renderClinicalTrialsGovStudyDocument(nctID string, data map[string]any) string {
 	protocol := object(data, "protocolSection")
 	derived := object(data, "derivedSection")
 	identification := object(protocol, "identificationModule")
@@ -258,4 +356,34 @@ func documentList(value any) string {
 		lines = append(lines, fmt.Sprintf("- %s: %s", fallback(text(doc["typeAbbrev"]), "Document"), fallback(text(doc["url"]), "No URL")))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func addFilter(values url.Values, key string, value string) {
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		values.Set(key, trimmed)
+	}
+}
+
+func locationCountryFilter(country string) string {
+	if trimmed := strings.TrimSpace(country); trimmed != "" {
+		return "AREA[LocationCountry]" + trimmed
+	}
+	return ""
+}
+
+func clamp(value int, minValue int, maxValue int) int {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}
+
+func shorten(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	return strings.TrimSpace(value[:limit-3]) + "..."
 }

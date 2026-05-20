@@ -3,18 +3,27 @@ package clinicaltrials
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 )
 
-func (c *Client) searchEUTrials(ctx context.Context, params SearchTrialsParams) (map[string]any, error) {
+func (c *Client) searchEUClinicalTrials(ctx context.Context, params SearchTrialsParams) (map[string]any, error) {
+	return c.requestJSON(ctx, "EU Clinical Trials", http.MethodPost, c.euBaseURL+"/search", nil, c.euSearchRequestBody(params))
+}
+
+func (c *Client) getEUClinicalTrialsStudy(ctx context.Context, ctNumber string) (map[string]any, error) {
+	return c.requestJSON(ctx, "EU Clinical Trials", http.MethodGet, c.euBaseURL+"/retrieve/"+ctNumber, nil, nil)
+}
+
+func (c *Client) euSearchRequestBody(params SearchTrialsParams) map[string]any {
 	pageSize := params.PageSize
 	if pageSize == 0 {
 		pageSize = 5
 	}
 	pageSize = clamp(pageSize, 1, c.maxPageSize)
 
-	body := map[string]any{
+	return map[string]any{
 		"pagination": map[string]any{
 			"page": euSearchPage(params.PageToken),
 			"size": pageSize,
@@ -25,8 +34,6 @@ func (c *Client) searchEUTrials(ctx context.Context, params SearchTrialsParams) 
 		},
 		"searchCriteria": euSearchCriteria(params),
 	}
-
-	return c.postEUJSON(ctx, "/search", body)
 }
 
 func euSearchCriteria(params SearchTrialsParams) map[string]any {

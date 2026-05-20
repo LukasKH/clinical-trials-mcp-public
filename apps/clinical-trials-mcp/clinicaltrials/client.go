@@ -1,8 +1,10 @@
 package clinicaltrials
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -58,6 +60,152 @@ func NewClient(baseURL string, euBaseURL string, requestTimeout time.Duration, m
 		},
 		maxPageSize: maxPageSize,
 	}
+}
+
+func (c *Client) SearchTrials(ctx context.Context, params SearchTrialsParams) (string, error) {
+	region, country, err := normalizeSearchScope(params)
+	if err != nil {
+		return "", err
+	}
+	params.Country = country
+
+	searchCT := region != "EU"
+	searchEU := region != "US"
+	var ctData map[string]any
+	var ctValues url.Values
+	var ctErr error
+	var euData map[string]any
+	var euErr error
+	if searchCT {
+		ctData, ctValues, ctErr = c.searchClinicalTrialsGov(ctx, params, region)
+	}
+	if searchEU {
+		euData, euErr = c.searchEUClinicalTrials(ctx, params)
+	}
+	if searchCT && searchEU && ctErr != nil && euErr != nil {
+		return "", fmt.Errorf("search ClinicalTrials.gov: %v; search EU Clinical Trials: %w", ctErr, euErr)
+	}
+	if searchCT && !searchEU && ctErr != nil {
+		return "", ctErr
+	}
+	if searchEU && !searchCT && euErr != nil {
+		return "", euErr
+	}
+
+	return renderCombinedTrialSearchResults(region, ctData, ctValues, ctErr, euData, euErr), nil
+}
+
+func (c *Client) GetStudy(ctx context.Context, params GetStudyParams) (string, error) {
+	studyID := strings.TrimSpace(params.StudyID)
+	if studyID == "" {
+		studyID = strings.TrimSpace(params.NCTID)
+	}
+	if studyID == "" {
+		studyID = strings.TrimSpace(params.EUCTNumber)
+	}
+	normalizedNCTID := strings.ToUpper(studyID)
+	if euCTNumberPattern.MatchString(studyID) {
+		data, err := c.getEUClinicalTrialsStudy(ctx, studyID)
+		if err != nil {
+			return "", err
+		}
+		return renderEUStudyDocument(studyID, data), nil
+	}
+	if !nctIDPattern.MatchString(normalizedNCTID) {
+		return "", fmt.Errorf("study_id must be an NCT ID like NCT04280705 or an EU Clinical Trials CT number like 2025-523486-17-00")
+	}
+
+	data, err := c.getClinicalTrialsGovStudy(ctx, normalizedNCTID)
+	if err != nil {
+		return "", err
+	}
+	return renderClinicalTrialsGovStudyDocument(normalizedNCTID, data), nil
+}
+
+func renderCombinedTrialSearchResults(region string, ctData map[string]any, ctValues url.Values, ctErr error, euData map[string]any, euErr error) string {
+	lines := []string{"# Trial Search Results", ""}
+	if region != "EU" {
+		if ctErr != nil {
+			lines = append(lines, "## ClinicalTrials.gov", "", "ClinicalTrials.gov search unavailable: "+ctErr.Error(), "")
+		} else {
+			lines = append(lines, renderClinicalTrialsGovSearchResults(ctData, ctValues), "")
+		}
+	}
+	if region != "US" {
+		if euErr != nil {
+			lines = append(lines, "## EU Clinical Trials", "", "EU Clinical Trials search unavailable: "+euErr.Error())
+		} else {
+			lines = append(lines, renderEUSearchResults(euData))
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+var validSearchRegions = map[string]bool{
+	"ALL": true,
+	"EU":  true,
+	"US":  true,
+}
+
+func normalizeSearchRegion(value string) (string, error) {
+	normalized := strings.ToUpper(strings.TrimSpace(value))
+	switch normalized {
+	case "":
+		return "ALL", nil
+	case "USA", "UNITED STATES", "UNITED_STATES":
+		return "US", nil
+	case "EUROPE", "EUROPEAN UNION", "EUROPEAN_UNION":
+		return "EU", nil
+	}
+	if !validSearchRegions[normalized] {
+		return "", fmt.Errorf("invalid region %q", value)
+	}
+	return normalized, nil
+}
+
+func normalizeSearchScope(params SearchTrialsParams) (string, string, error) {
+	region, err := normalizeSearchRegion(params.Region)
+	if err != nil {
+		return "", "", err
+	}
+
+	country := strings.TrimSpace(params.Country)
+	location := strings.TrimSpace(params.Location)
+	if country == "" {
+		country = location
+	}
+	if params.Region != "" {
+		return region, country, nil
+	}
+
+	if inferredRegion := regionFromLocation(location); inferredRegion != "" {
+		if strings.EqualFold(country, location) {
+			country = ""
+		}
+		return inferredRegion, country, nil
+	}
+	if inferredRegion := regionFromLocation(country); inferredRegion != "" {
+		country = ""
+		return inferredRegion, country, nil
+	}
+	return region, country, nil
+}
+
+func regionFromLocation(value string) string {
+	normalized := normalizeLocationText(value)
+	switch normalized {
+	case "eu", "europe", "european union", "european_union":
+		return "EU"
+	case "us", "u s", "usa", "u s a", "america", "united states", "united states of america":
+		return "US"
+	}
+	return ""
+}
+
+func normalizeLocationText(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.NewReplacer(".", " ", "_", " ", "-", " ").Replace(normalized)
+	return strings.Join(strings.Fields(normalized), " ")
 }
 
 func object(values map[string]any, key string) map[string]any {

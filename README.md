@@ -169,3 +169,7 @@ terraform -chdir=infra/remote-mcp validate
 
 CI runs `go test -race ./...` on Linux. On Windows, `go test -race` requires a
 C compiler; use `go test ./...` locally unless you have one installed.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
